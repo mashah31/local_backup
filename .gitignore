@@ -1,0 +1,4 @@
+*.suo
+BackupUtility/Properties
+BackupUtility/bin
+BackupUtility/obj
