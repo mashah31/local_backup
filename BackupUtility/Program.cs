@@ -115,48 +115,59 @@ namespace BackupUtility
                         WriteToLog("\nCatalog - " + catalog + " @ " + DateTime.Now.ToShortTimeString() + "'", false);
                         string sourceDirPath = sourceDir + catalog + "/";
 
-                        //Collect disk space needed to backup catalog
-                        long diskSpaceReqForCatalog = GetDirectorySize(sourceDirPath);
-                        WriteToLog("\tcatalog " + catalog + " need " + Math.Round(ConvertBytesToMegabytes(diskSpaceReqForCatalog), 2) + " MBytes disk space.", false);
-
-                        //Check if disk has more than threshold disk space after backing up catalog
-                        DetermineBackupSpaceAvailability(sourceDir, diskSpaceReqForCatalog, catalog);
-
-                        //now take backup of catalog
-                        bool backupSuccess = false;
-                        try
+                        if (Directory.Exists(sourceDirPath))
                         {
-                            string destDirPath = destinationDir + string.Format("{0}_{1}.old", catalog, DateTime.Now.ToString("MM-dd-yyyy_hhmmss")) + "/";
-                            _totalFiles = new DirectoryInfo(sourceDirPath).GetFiles("*.*", SearchOption.AllDirectories).Length; _processedFiles = 0;
-                            _backingUpProgressMessage = string.Format("\nBacking-up: {0},", catalog, _totalFiles);
-                            Console.Write(_backingUpProgressMessage);
+                            //Collect disk space needed to backup catalog
+                            long diskSpaceReqForCatalog = GetDirectorySize(sourceDirPath);
+                            WriteToLog("\tcatalog " + catalog + " need " + Math.Round(ConvertBytesToMegabytes(diskSpaceReqForCatalog), 2) + " MBytes disk space.", false);
 
-                            DirectoryCopy(sourceDirPath, destDirPath, true);
-                            BackupValidator(sourceDirPath, destDirPath);
-                            backupSuccess = true;
-                            WriteToLog(string.Format("\tSuccessfully backed up @ '{1}'", catalog, DateTime.Now.ToShortTimeString()), false);
-                        }
-                        catch (Exception ex)
-                        {
-                            WriteToLog(string.Format("Error : Catalog backup failed for {0}, Reason : {1}", catalog, ex.Message));
-                        }
+                            //Check if disk has more than threshold disk space after backing up catalog
+                            DetermineBackupSpaceAvailability(sourceDir, diskSpaceReqForCatalog, catalog);
 
-                        //delete old catalog backup copy and backup file from parente folder
-                        if (backupSuccess)
+                            //now take backup of catalog
+                            bool backupSuccess = false;
+                            try
+                            {
+                                string destDirPath = destinationDir + string.Format("{0}_{1}.old", catalog, DateTime.Now.ToString("MM-dd-yyyy_hhmmss")) + "/";
+                                _totalFiles = new DirectoryInfo(sourceDirPath).GetFiles("*.*", SearchOption.AllDirectories).Length; _processedFiles = 0;
+                                _backingUpProgressMessage = string.Format("\nBacking-up: {0},", catalog, _totalFiles);
+                                Console.Write(_backingUpProgressMessage);
+
+                                DirectoryCopy(sourceDirPath, destDirPath, true);
+                                BackupValidator(sourceDirPath, destDirPath);
+                                backupSuccess = true;
+                                WriteToLog(string.Format("\tSuccessfully backed up @ '{1}'", catalog, DateTime.Now.ToShortTimeString()), false);
+                            }
+                            catch (Exception ex)
+                            {
+                                WriteToLog(string.Format("Error : Catalog backup failed for {0}, Reason : {1}", catalog, ex.Message));
+                            }
+
+                            //delete old catalog backup copy and backup file from parente folder
+                            if (backupSuccess)
+                            {
+                                //delete catalog file
+                                if (File.Exists(backupFileParentDir + "/" + catalog + ".txt"))
+                                {
+                                    File.Delete(backupFileParentDir + "/" + catalog + ".txt");
+                                }
+
+                                //after backup collect catalog dirs from backup root
+                                Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = CollectBackedupCatalogDirsFromRoot(destinationDir);
+
+                                //delete extra backup copy, only if extra backup exists... 
+                                if (dictCtlgWithItsDirs.ContainsKey(catalog))
+                                {
+                                    DeleteExtraCatalogBackups(dictCtlgWithItsDirs[catalog].ToArray(), catalog);
+                                }
+                            }
+                        }
+                        else
                         {
                             //delete catalog file
                             if (File.Exists(backupFileParentDir + "/" + catalog + ".txt"))
                             {
                                 File.Delete(backupFileParentDir + "/" + catalog + ".txt");
-                            }
-
-                            //after backup collect catalog dirs from backup root
-                            Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = CollectBackedupCatalogDirsFromRoot(destinationDir);
-
-                            //delete extra backup copy, only if extra backup exists... 
-                            if (dictCtlgWithItsDirs.ContainsKey(catalog))
-                            {
-                                DeleteExtraCatalogBackups(dictCtlgWithItsDirs[catalog].ToArray(), catalog);
                             }
                         }
                     }
@@ -221,7 +232,9 @@ namespace BackupUtility
                         dictCtlgWithItsDirs[catalogName].Add(ctlgDir);
                     }
                     else
+                    {
                         dictCtlgWithItsDirs[catalogName].Add(ctlgDir);
+                    }
                 }
             }
             return dictCtlgWithItsDirs;
