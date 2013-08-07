@@ -4,42 +4,23 @@ using System.Text;
 using System.IO;
 using System.Linq;
 
-using System.IO;
+using BackupUtility.Debug;
 
 namespace BackupUtility
 {
     class Program
     {
-        /// <summary>
-        /// Log file path
-        /// </summary>
-        public static string LogFilePath = string.Empty;
-        /// <summary>
-        /// Send Mail Config Options
-        /// </summary>
+        private static Logger log = Logger.GetLogger("Backup Utility");
         private static string _sendEmailPath = string.Empty, _mailFrom = string.Empty, _mailTo = string.Empty, _mailServer = string.Empty;
-        /// <summary>
-        /// Backup strategy stats variables
-        /// </summary>
         private static int _totalFiles = 0, _processedFiles = 0, _keepLastXCopyOfBackup = 3;
-        /// <summary>
-        /// Backup strategy status message
-        /// </summary>
         private static string _backingUpProgressMessage = string.Empty;
-        /// <summary>
-        /// Delete old backed up catalogs or not?
-        /// </summary>
         private static bool _deleteOldCatalogs = true;
-        /// <summary>
-        /// Threshold value to alert in case of low disk space
-        /// </summary>
         private static int _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage = 10;
 
         static void Main(string[] args)
         {
-            #region argument handling
-            
-            string sourceDir = string.Empty, destinationDir = string.Empty, backupFileParentDir = string.Empty, clientName = string.Empty;
+            #region argument handling 
+            string logFile = string.Empty, sourceDir = string.Empty, destinationDir = string.Empty, backupFileParentDir = string.Empty, clientName = string.Empty;
             DateTime dtBackupFileDate = DateTime.Now;
             string mailSubject = string.Empty, mailBody = string.Empty;
 
@@ -47,8 +28,8 @@ namespace BackupUtility
             try
             {
                 backupFileParentDir = GetValueFromConfigOrArgument(args, "backupFileParentDir");
-                LogFilePath = GetValueFromConfigOrArgument(args, "backupLogFile") + string.Format("BackupLog_{0}-{1}-{2}-{3}{4}{5}.txt", dtBackupFileDate.Month.ToString("d2"), dtBackupFileDate.Day.ToString("d2"), dtBackupFileDate.Year.ToString("d4"), dtBackupFileDate.Hour.ToString("d2"), dtBackupFileDate.Minute.ToString("d2"), dtBackupFileDate.Second.ToString("d2"));
-
+                logFile = GetValueFromConfigOrArgument(args, "backupLogFile") + string.Format("BackupLog_{0}-{1}-{2}-{3}{4}{5}.txt", dtBackupFileDate.Month.ToString("d2"), dtBackupFileDate.Day.ToString("d2"), dtBackupFileDate.Year.ToString("d4"), dtBackupFileDate.Hour.ToString("d2"), dtBackupFileDate.Minute.ToString("d2"), dtBackupFileDate.Second.ToString("d2"));
+                
                 clientName = GetValueFromConfigOrArgument(args, "clientName");
                 _keepLastXCopyOfBackup = Convert.ToInt32(GetValueFromConfigOrArgument(args, "keepLastXCopyOfBackup"));
                 _sendEmailPath = GetValueFromConfigOrArgument(args, "sendEmailExePath");
@@ -61,7 +42,11 @@ namespace BackupUtility
                 _deleteOldCatalogs = Convert.ToBoolean(GetValueFromConfigOrArgument(args, "deleteOldCatalogs"));
                 _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage = Convert.ToInt32(GetValueFromConfigOrArgument(args, "lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage"));
 
-                InitializeLogFile(LogFilePath, true);
+                Logger.LogToConsole = false;
+                Logger.PrimaryLogFile = logFile;
+                Logger.ShowClassNames = false;
+                Logger.ShowTimestamp = false;
+                Logger.CurrentLevel = Level.INFO;
             }
             catch (Exception ex)
             {
@@ -69,65 +54,66 @@ namespace BackupUtility
                 Environment.Exit(1);
             }
             #endregion
-
+            
             #region backup utility
+            bool AnyErrorOccuredInBackup = false;     
+
             try
             {
                 string startUpMessage = "Backup Date : " + DateTime.Now.ToShortDateString();
-                Console.WriteLine(startUpMessage);
-
+                Console.WriteLine(startUpMessage);                
+                
                 //if backup file parent directory exists ....
-                if (Directory.Exists(backupFileParentDir))
+                if(Directory.Exists(backupFileParentDir))
                 {
                     //collect catalog backup files
                     #region Collect catalog backup files
                     string[] backupCatalogFiles = Directory.GetFiles(backupFileParentDir);
                     List<string> catalogTobackupQueue = new List<string>();
-
+                    
                     //iterate through each file and collect catalog name to backup
-                    foreach (string file in backupCatalogFiles)
+                    foreach(string file in backupCatalogFiles)
                     {
                         string fileNameWithoutExt = file.Substring(0, file.IndexOf('.')).Replace(backupFileParentDir, "");
                         if (!catalogTobackupQueue.Contains(fileNameWithoutExt))
-                        {
                             catalogTobackupQueue.Add(fileNameWithoutExt);
-                        }
                     }
                     string catalogMessage = string.Format("Catalogs needing backup - {0}", catalogTobackupQueue.Count);
-                    WriteToLog(catalogMessage, false);
+                    log.Info(catalogMessage, false); Console.WriteLine(catalogMessage);
                     #endregion
 
                     if (catalogTobackupQueue.Count < 1)
                     {
                         string msg = "\nJob is over... tada!!";
-                        WriteToLog(msg, false);
+                        Console.WriteLine(msg); log.Info(msg, false);
 
                         mailSubject = "Daily catalog backup was Successful";
-                        SendMail(mailSubject, mailBody, LogFilePath);
+                        SendMail(mailSubject, mailBody, logFile);
                         Environment.Exit(0);
                     }
 
-                    WriteToLog(string.Format("\n\nBackup starting at \"{0}\"", DateTime.Now.ToShortTimeString()), false);
-
+                    log.Info(string.Format("\n\nBackup starting at \"{0}\"", DateTime.Now.ToShortTimeString()), false);
+                    
                     //iterate through each catalog for backup process
                     foreach (string catalog in catalogTobackupQueue)
                     {
-                        WriteToLog("\nCatalog - " + catalog + " @ " + DateTime.Now.ToShortTimeString() + "'", false);
+                        log.Info("\nCatalog - " + catalog + " @ " + DateTime.Now.ToShortTimeString() + "'", false);
                         string sourceDirPath = sourceDir + catalog + "/";
 
+                        //Check if source directory exists.. 
                         if (Directory.Exists(sourceDirPath))
                         {
-                            //Collect disk space needed to backup catalog
-                            long diskSpaceReqForCatalog = GetDirectorySize(sourceDirPath);
-                            WriteToLog("\tcatalog " + catalog + " need " + Math.Round(ConvertBytesToMegabytes(diskSpaceReqForCatalog), 2) + " MBytes disk space.", false);
-
-                            //Check if disk has more than threshold disk space after backing up catalog
-                            DetermineBackupSpaceAvailability(sourceDir, diskSpaceReqForCatalog, catalog);
-
-                            //now take backup of catalog
                             bool backupSuccess = false;
                             try
                             {
+                                //Collect disk space needed to backup catalog
+                                long diskSpaceReqForCatalog = GetDirectorySize(sourceDirPath);
+                                log.Info("\tcatalog " + catalog + " need " + Math.Round(ConvertBytesToMegabytes(diskSpaceReqForCatalog), 2) + " MBytes disk space.", false);
+
+                                //Check if disk has more than threshold disk space after backing up catalog
+                                DetermineBackupSpaceAvailability(sourceDir, diskSpaceReqForCatalog, catalog);
+
+                                //now take backup of catalog
                                 string destDirPath = destinationDir + string.Format("{0}_{1}.old", catalog, DateTime.Now.ToString("MM-dd-yyyy_hhmmss")) + "/";
                                 _totalFiles = new DirectoryInfo(sourceDirPath).GetFiles("*.*", SearchOption.AllDirectories).Length; _processedFiles = 0;
                                 _backingUpProgressMessage = string.Format("\nBacking-up: {0},", catalog, _totalFiles);
@@ -136,66 +122,67 @@ namespace BackupUtility
                                 DirectoryCopy(sourceDirPath, destDirPath, true);
                                 BackupValidator(sourceDirPath, destDirPath);
                                 backupSuccess = true;
-                                WriteToLog(string.Format("\tSuccessfully backed up @ '{1}'", catalog, DateTime.Now.ToShortTimeString()), false);
+                                log.Info(string.Format("\tSuccessfully backed up @ '{1}'", catalog, DateTime.Now.ToShortTimeString()), false);
+
+                                //delete old catalog backup copy and backup file from parente folder
+                                if (backupSuccess)
+                                {
+                                    //after backup collect catalog dirs from backup root
+                                    Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = CollectBackedupCatalogDirsFromRoot(destinationDir);
+
+                                    //delete extra backup copy
+                                    DeleteExtraCatalogBackups(dictCtlgWithItsDirs[catalog].ToArray(), catalog);
+                                }
                             }
                             catch (Exception ex)
                             {
-                                WriteToLog(string.Format("Error : Catalog backup failed for {0}, Reason : {1}", catalog, ex.Message));
-                            }
-
-                            //delete old catalog backup copy and backup file from parente folder
-                            if (backupSuccess)
-                            {
-                                //delete catalog file
-                                if (File.Exists(backupFileParentDir + "/" + catalog + ".txt"))
-                                {
-                                    File.Delete(backupFileParentDir + "/" + catalog + ".txt");
-                                }
-
-                                //after backup collect catalog dirs from backup root
-                                Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = CollectBackedupCatalogDirsFromRoot(destinationDir);
-
-                                //delete extra backup copy, only if extra backup exists... 
-                                if (dictCtlgWithItsDirs.ContainsKey(catalog))
-                                {
-                                    DeleteExtraCatalogBackups(dictCtlgWithItsDirs[catalog].ToArray(), catalog);
-                                }
+                                log.Error(string.Format("Catalog backup failed for {0}\nFailure Reason : {1}\nStacktrace : {2}", catalog, ex.Message, ex.StackTrace));
+                                AnyErrorOccuredInBackup = true;
                             }
                         }
                         else
                         {
-                            //delete catalog file
-                            if (File.Exists(backupFileParentDir + "/" + catalog + ".txt"))
-                            {
-                                File.Delete(backupFileParentDir + "/" + catalog + ".txt");
-                            }
+                            log.Info("\tCatalog source directory doesn't exists. So backup didn't got created.", false);
+                        }
+
+                        //delete catalog file
+                        if (File.Exists(backupFileParentDir + "/" + catalog + ".txt"))
+                        {
+                            File.Delete(backupFileParentDir + "/" + catalog + ".txt");
                         }
                     }
 
                     string finalMsg = "\nAll catalogs have been backed-up!! Job is over!! tada!!";
-                    WriteToLog(finalMsg, false);
+                    log.Info(finalMsg, false); Console.WriteLine(finalMsg);
                 }
                 else
                 {
                     string error = "Directory does not exists.. : " + backupFileParentDir;
-                    WriteToLog("Error : " + error);
+                    log.Error(error); Console.WriteLine(error);
                     throw new DirectoryNotFoundException(string.Format("Backup file {0} does not exists.", backupFileParentDir));
                 }
             }
             catch (Exception ex)
             {
-                mailSubject = string.Format("CRITICAL ALERT! Daily {0} Catalog Backup Failed.", GetValueFromConfigOrArgument(args, "clientName"));
+                mailSubject = string.Format("CRITICAL ALERT!!! Daily {0} Catalog Backup Failed.", GetValueFromConfigOrArgument(args, "clientName"));
                 mailBody = string.Format("Backup on {0} failed.\n\nException : {1}\nInner Exception:{2}", GetValueFromConfigOrArgument(args, "clientName"), ex.Message, ex.StackTrace);
-                WriteToLog(string.Format("Exception : \n{0}\n{1}", mailSubject, mailBody));
+                log.Error(string.Format("Exception : \n{0}\n{1}", mailSubject, mailBody));
+                Console.WriteLine(string.Format("Exception : \n{0}\n{1}", mailSubject, mailBody));
                 SendMail(mailSubject, mailBody, "");
             }
-            #endregion
+            #endregion 
 
-            mailSubject = "Daily catalog backup was Successful";
-            SendMail(mailSubject, mailBody, LogFilePath);
+            if (AnyErrorOccuredInBackup)
+            {
+                mailSubject = string.Format("CRITICAL ALERT!!! Daily {0} Catalog Backup compelted with failures.", GetValueFromConfigOrArgument(args, "clientName"));
+                SendMail(mailSubject, mailBody, logFile);
+            }
+            else
+            {
+                mailSubject = "Daily catalog backup was Successful";
+                SendMail(mailSubject, mailBody, logFile);
+            }
         }
-
-        #region Support Functions
 
         /// <summary>
         /// Collect all backed up catalog dirs from backup root
@@ -206,23 +193,19 @@ namespace BackupUtility
         {
             //collect catalog dirs from catalog dir root
             DirectoryInfo[] ctlgDirs = new DirectoryInfo(destinationDir).GetDirectories();
-
+            
             //separate catalog dirs by catalog name
-            Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = new Dictionary<string, List<DirectoryInfo>>();
+            Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = new Dictionary<string,List<DirectoryInfo>>();
             foreach (DirectoryInfo ctlgDir in ctlgDirs)
             {
                 //format of catalog backup folder = "catalog" + "P4_" + datetime.log
                 //collect catalog directories and separate it by catalog name...
                 string catalogName = string.Empty;
-
+                
                 if (ctlgDir.Name.Contains("P4_"))
-                {
                     catalogName = ctlgDir.Name.Substring(0, ctlgDir.Name.IndexOf("P4_") + 2);
-                }
                 if (ctlgDir.Name.Contains("p4_"))
-                {
                     catalogName = ctlgDir.Name.Substring(0, ctlgDir.Name.IndexOf("p4_") + 2);
-                }
 
                 if (!catalogName.Equals(string.Empty))
                 {
@@ -232,9 +215,7 @@ namespace BackupUtility
                         dictCtlgWithItsDirs[catalogName].Add(ctlgDir);
                     }
                     else
-                    {
                         dictCtlgWithItsDirs[catalogName].Add(ctlgDir);
-                    }
                 }
             }
             return dictCtlgWithItsDirs;
@@ -261,11 +242,11 @@ namespace BackupUtility
             availableDiskSpace = availableDiskSpace - diskSpaceReqForCatalog;
             double afterBackupRemainingDiskSpacePercentage = (availableDiskSpace * 100) / totalDiskSpace;
 
-            //log.Debug(string.Format("After backing up still have {0}% disk space available.", afterBackupRemainingDiskSpacePercentage));
-
+            log.Debug(string.Format("After backing up still have {0}% disk space available.", afterBackupRemainingDiskSpacePercentage));
+            
             if (afterBackupRemainingDiskSpacePercentage < _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage)
             {
-                WriteToLog("catalog " + catalog + " backup faild as do not have enough space on drive.");
+                log.Error("catalog " + catalog + " backup faild as do not have enough space on drive.");
                 string mailSubject = string.Format("CRITICAL ALERT! Daily Catalog Backup Failed! - Low Disk Space");
                 string mailBody = string.Format("Catalog backup cannot be completed as availeble disk space on drive is less than threshold {0}%\n"
                         + "Total Disk Space : {1:00.00}, \nDisk Space required for Catalog backup : {2:00.00}\nAvailable diskspace after backup : {3:00.00}({0})",
@@ -285,12 +266,12 @@ namespace BackupUtility
         {
             catalogDirs = catalogDirs.OrderBy(p => p.CreationTime).ToArray();
             string msg = string.Format("\tTotal backup copy '{1}', latest catalog copy date '{2}'.", catalog, catalogDirs.Length, catalogDirs[catalogDirs.Length - 1].CreationTime.ToShortDateString());
-            WriteToLog("\t" + msg, false);
-
+            log.Info("\t" + msg, false); Console.WriteLine("\n" + msg);
+                        
             if (catalogDirs.Length > 3)
             {
                 string latestCatalogMessage = "\t\tCurrent catalogs have the dates ";
-                int counter = 0;
+                int counter = 0; 
                 Console.WriteLine(string.Format("\nCatalog dirs to delete : {0}", catalogDirs.Length - 3));
                 foreach (DirectoryInfo dir in catalogDirs)
                 {
@@ -302,10 +283,10 @@ namespace BackupUtility
                             {
                                 Directory.Delete(dir.FullName, true);
                                 Console.WriteLine("Deleted:" + dir.Name);
-                                WriteToLog("\t\tDeleted : backup copy : " + dir.Name + " created @ '" + dir.CreationTime + "'", false);
+                                log.Info("\t\tDeleted : backup copy : " + dir.Name + " created @ '" + dir.CreationTime + "'", false);
                             }
                             else
-                                WriteToLog("\t\tCatalog dir " + dir.Name + " created @ " + dir.CreationTime + ", To delete.", false);
+                                log.Info("\t\tCatalog dir " + dir.Name + " created @ " + dir.CreationTime + ", To delete.", false);
                         }
                         else
                         {
@@ -314,12 +295,13 @@ namespace BackupUtility
                     }
                     catch (Exception e)
                     {
-                        WriteToLog("Error : Catalog : {0}\nException : {1}\nStacktrace : {2}", false);
+                        Console.WriteLine(e.Message);
+                        log.Error("Catalog : {0}\nException : {1}\nStacktrace : {2}", false);
                     }
                     counter++;
                 }
                 latestCatalogMessage = latestCatalogMessage.Substring(0, latestCatalogMessage.Length - 1) + ".";
-                WriteToLog(latestCatalogMessage, false);
+                log.Info(latestCatalogMessage, false);
             }
         }
 
@@ -335,14 +317,10 @@ namespace BackupUtility
             DirectoryInfo[] dirs = dir.GetDirectories();
 
             if (!dir.Exists)
-            {
-                throw new DirectoryNotFoundException("Source directory does not exist or could not be found: " + sourceDirName);
-            }
+                throw new DirectoryNotFoundException("Source directory does not exist or could not be found: "+ sourceDirName);
 
             if (Directory.Exists(destDirName))
-            {
                 Directory.Delete(destDirName, true);
-            }
 
             Directory.CreateDirectory(destDirName);
 
@@ -381,13 +359,9 @@ namespace BackupUtility
 
                 int indexToGoLeft = _backingUpProgressMessage.Length;
                 if (indexToGoLeft > Console.WindowWidth)
-                {
                     Console.CursorLeft = indexToGoLeft - Console.WindowWidth;
-                }
                 else
-                {
                     Console.CursorLeft = indexToGoLeft;
-                }
                 Console.Write(sb.ToString());
             }
             catch (Exception ex)
@@ -404,27 +378,19 @@ namespace BackupUtility
         private static void BackupValidator(string sourceDirName, string destDirName)
         {
             if (!Directory.Exists(destDirName))
-            {
                 throw new DirectoryNotFoundException("Catalog backup failed.. catalog directory doesnot exists.");
-            }
 
             DirectoryInfo sourceDirInfo = new DirectoryInfo(sourceDirName);
             DirectoryInfo destDirInfo = new DirectoryInfo(destDirName);
 
             if (sourceDirInfo.GetDirectories("*.*", SearchOption.AllDirectories).Length != destDirInfo.GetDirectories("*.*", SearchOption.AllDirectories).Length)
-            {
                 throw new Exception("Catalog backup failed.. Different number of sub-directories in catalog directories.");
-            }
 
             if (sourceDirInfo.GetFiles("*.*", SearchOption.AllDirectories).Length != destDirInfo.GetFiles("*.*", SearchOption.AllDirectories).Length)
-            {
                 throw new Exception("Catalog backup failed.. Different number of files in catalog directories.");
-            }
 
             if (GetDirectorySize(sourceDirName) != GetDirectorySize(destDirName))
-            {
                 throw new Exception("Catalog backup failed.. catalog directory sizes are different.");
-            }
         }
 
         /// <summary>
@@ -470,14 +436,10 @@ namespace BackupUtility
 
             //Handle all null values
             if (CurrentValue == null)
-            {
-                CurrentValue = string.Empty;
-            }
+                CurrentValue = "";
 
             if (CurrentValue.Contains("\\"))
-            {
                 CurrentValue = CurrentValue.Replace("\\", "/");
-            }
 
             return CurrentValue;
         }
@@ -495,18 +457,15 @@ namespace BackupUtility
                 string sendMailEXEPath = _sendEmailPath + "sendEmail.exe";
                 string arguments = string.Empty;
                 if (string.IsNullOrEmpty(attachment))
-                {
                     arguments = string.Format("-f {0} -t {1} -s {2} -u \"{3}\" -m \"{4}\"", _mailFrom, _mailTo, _mailServer, subject, body);
-                }
                 else
-                {
                     arguments = string.Format("-f {0} -t {1} -s {2} -u \"{3}\" -o message-file=\"{4}\"", _mailFrom, _mailTo, _mailServer, subject, attachment);
-                }
                 System.Diagnostics.Process.Start(sendMailEXEPath, arguments);
             }
             catch (Exception ex)
             {
-                WriteToLog(string.Format("Exception SendEmail : \n{0}\n{1}", ex.Message, ex.InnerException));
+                log.Error(string.Format("Exception SendEmail : \n{0}\n{1}", ex.Message, ex.InnerException));
+                Console.WriteLine(string.Format("Exception SendEmail : \n{0}\n{1}", ex.Message, ex.InnerException));
                 throw ex;
             }
         }
@@ -520,90 +479,5 @@ namespace BackupUtility
         {
             return (bytes / 1024f) / 1024f;
         }
-
-        #endregion
-
-        #region Logging
-
-        /// <summary>
-        /// Write to log
-        /// </summary>
-        /// <param name="LogLine"> Line to log </param>
-        /// <param name="LogLevel"> Level (Default level is 2) </param>
-        /// <param name="WriteToGUI"> Want to write to GUI? (yes/no), yes than fire event to write text on GUI. </param>
-        private static void WriteToLog(string LogLine, bool WriteToGUI = true)
-        {
-            if (LogLine != "NULL")
-            {
-                WriteToLog(LogLine, LogFilePath, WriteToGUI);
-            }
-        }
-
-        /// <summary>
-        /// Write to log
-        /// </summary>
-        /// <param name="LogLine"> Line to log </param>
-        /// <param name="LogFilePath"> Path of log file </param>
-        /// <param name="LogLevel"> Level (Default level is 2) </param>
-        /// <param name="WriteToGUI"> Want to write to GUI? (yes/no), yes than fire event to write text on GUI. </param>
-        private static void WriteToLog(String LogLine, String LogFilePath, bool WriteToGUI = true)
-        {
-            if (WriteToGUI)
-            {
-                Console.WriteLine(LogLine);
-            }
-
-            if (LogFilePath != "")
-            {
-                System.IO.StreamWriter MyStreamWriter;
-                MyStreamWriter = new System.IO.StreamWriter(LogFilePath, true, System.Text.Encoding.Unicode);
-                MyStreamWriter.WriteLine(LogLine);
-                MyStreamWriter.Close();
-            }
-        }
-
-        /// <summary>
-        /// Intialize log file.
-        /// </summary>
-        /// <param name="LogFilePath"> Path of log file </param>
-        /// <param name="OverwriteExistingLogFile"> Do you want to overwrite existing file? </param>
-        private static void InitializeLogFile(string LogFilePath, Boolean OverwriteExistingLogFile = true)
-        {
-            if (LogFilePath != "")
-            {
-                String LogLine = "";
-                if (OverwriteExistingLogFile == true)
-                {
-                    try
-                    {
-                        if (System.IO.File.Exists(LogFilePath) == true)
-                        {
-                            System.IO.File.Delete(LogFilePath);
-                        }
-                    }
-                    finally { }
-                }
-
-                try
-                {
-                    System.IO.StreamWriter MyStreamWriter;
-                    MyStreamWriter = new System.IO.StreamWriter(LogFilePath, true, System.Text.Encoding.Unicode);
-                    MyStreamWriter.Close();
-
-                    if (LogLine != "")
-                    {
-                        WriteToLog(LogLine, LogFilePath);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    LogLine = "Error opening log file.  No data will be written to the log file.   LogFilePath=" + LogFilePath + "   ex.Message=" + ex.Message;
-                    WriteToLog(LogLine);
-                    LogFilePath = "";
-                }
-            }
-        }
-
-        #endregion
     }
 }

@@ -5,7 +5,7 @@
     <Platform Condition=" '$(Platform)' == '' ">x86</Platform>
     <ProductVersion>8.0.30703</ProductVersion>
     <SchemaVersion>2.0</SchemaVersion>
-    <ProjectGuid>{8BD106F2-4776-47C4-8AC8-636841CCF264}</ProjectGuid>
+    <ProjectGuid>{3B89C101-89D0-4365-B3FB-6EA9096419AF}</ProjectGuid>
     <OutputType>Exe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>BackupUtility</RootNamespace>
@@ -45,6 +45,12 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Debug\Appender.cs" />
+    <Compile Include="Debug\FileAppender.cs" />
+    <Compile Include="Debug\Level.cs" />
+    <Compile Include="Debug\Logger.cs" />
+    <Compile Include="Debug\StandardOutputAppender.cs" />
+    <Compile Include="Debug\TraceAppender.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
