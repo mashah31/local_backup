@@ -78,26 +78,23 @@ namespace BackupUtility
                         if (!catalogTobackupQueue.Contains(fileNameWithoutExt))
                             catalogTobackupQueue.Add(fileNameWithoutExt);
                     }
-                    string catalogMessage = string.Format("Catalogs needing backup - {0}", catalogTobackupQueue.Count);
+                    string catalogMessage = string.Format("Catalogs needing backup: {0}", catalogTobackupQueue.Count);
                     log.Info(catalogMessage, false); Console.WriteLine(catalogMessage);
                     #endregion
 
                     if (catalogTobackupQueue.Count < 1)
                     {
-                        string msg = "\nJob is over... tada!!";
-                        Console.WriteLine(msg); log.Info(msg, false);
-
                         mailSubject = "Daily catalog backup was Successful";
                         SendMail(mailSubject, mailBody, logFile);
                         Environment.Exit(0);
                     }
 
-                    log.Info(string.Format("\n\nBackup starting at \"{0}\"", DateTime.Now.ToShortTimeString()), false);
+                    log.Info(string.Format("\nBackup starting at {0}", DateTime.Now.ToShortTimeString()), false);
                     
                     //iterate through each catalog for backup process
                     foreach (string catalog in catalogTobackupQueue)
                     {
-                        log.Info("\nCatalog - " + catalog + " @ " + DateTime.Now.ToShortTimeString() + "'", false);
+                        log.Info("\nCatalog: " + catalog + " @ " + DateTime.Now.ToShortTimeString(), false);
                         string sourceDirPath = sourceDir + catalog + "/";
 
                         //Check if source directory exists.. 
@@ -108,9 +105,9 @@ namespace BackupUtility
                             {
                                 //Collect disk space needed to backup catalog
                                 long diskSpaceReqForCatalog = GetDirectorySize(sourceDirPath);
-                                log.Info("\tcatalog " + catalog + " need " + Math.Round(ConvertBytesToMegabytes(diskSpaceReqForCatalog), 2) + " MBytes disk space.", false);
+                                log.Info("needs " + Math.Round(ConvertBytesToMegabytes(diskSpaceReqForCatalog), 2) + " MBytes of disk space.", false);
 
-                                //Check if disk has more than threshold disk space after backing up catalog
+                                //Check if disk has more than threshold disk space after Successfully backed backing up catalog
                                 DetermineBackupSpaceAvailability(sourceDir, diskSpaceReqForCatalog, catalog);
 
                                 //now take backup of catalog
@@ -122,27 +119,26 @@ namespace BackupUtility
                                 DirectoryCopy(sourceDirPath, destDirPath, true);
                                 BackupValidator(sourceDirPath, destDirPath);
                                 backupSuccess = true;
-                                log.Info(string.Format("\tSuccessfully backed up @ '{1}'", catalog, DateTime.Now.ToShortTimeString()), false);
 
                                 //delete old catalog backup copy and backup file from parente folder
                                 if (backupSuccess)
                                 {
                                     //after backup collect catalog dirs from backup root
-                                    Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = CollectBackedupCatalogDirsFromRoot(destinationDir);
+                                    Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = CollectBackedupCatalogDirsFromRoot(catalog, destinationDir);
 
                                     //delete extra backup copy
-                                    DeleteExtraCatalogBackups(dictCtlgWithItsDirs[catalog].ToArray(), catalog);
+                                    DeleteExtraCatalogBackups(dictCtlgWithItsDirs, catalog);
                                 }
                             }
                             catch (Exception ex)
                             {
-                                log.Error(string.Format("Catalog backup failed for {0}\nFailure Reason : {1}\nStacktrace : {2}", catalog, ex.Message, ex.StackTrace));
+                                log.Error(string.Format("Catalog backup failed for {0}\nFailure Reason : {1}\nStacktrace : {2}", catalog, ex.Message, ex.InnerException));
                                 AnyErrorOccuredInBackup = true;
                             }
                         }
                         else
                         {
-                            log.Info("\tCatalog source directory doesn't exists. So backup didn't got created.", false);
+                            log.Info("Catalog source directory doesn't exists. So backup didn't got created.", false);
                         }
 
                         //delete catalog file
@@ -152,7 +148,7 @@ namespace BackupUtility
                         }
                     }
 
-                    string finalMsg = "\nAll catalogs have been backed-up!! Job is over!! tada!!";
+                    string finalMsg = string.Format("\nBackup task completed at {0}.", DateTime.Now.ToShortTimeString());
                     log.Info(finalMsg, false); Console.WriteLine(finalMsg);
                 }
                 else
@@ -174,7 +170,7 @@ namespace BackupUtility
 
             if (AnyErrorOccuredInBackup)
             {
-                mailSubject = string.Format("CRITICAL ALERT!!! Daily {0} Catalog Backup compelted with failures.", GetValueFromConfigOrArgument(args, "clientName"));
+                mailSubject = string.Format("CRITICAL ALERT!!! Daily {0} Catalog Backup completed with failures.", GetValueFromConfigOrArgument(args, "clientName"));
                 SendMail(mailSubject, mailBody, logFile);
             }
             else
@@ -189,34 +185,20 @@ namespace BackupUtility
         /// </summary>
         /// <param name="destinationDir"></param>
         /// <returns></returns>
-        private static Dictionary<string, List<DirectoryInfo>> CollectBackedupCatalogDirsFromRoot(string destinationDir)
+        private static Dictionary<string, List<DirectoryInfo>> CollectBackedupCatalogDirsFromRoot(string catalogName, string destinationDir)
         {
             //collect catalog dirs from catalog dir root
-            DirectoryInfo[] ctlgDirs = new DirectoryInfo(destinationDir).GetDirectories();
+            DirectoryInfo[] ctlgDirs = new DirectoryInfo(destinationDir).GetDirectories(string.Format("{0}*", catalogName), SearchOption.TopDirectoryOnly);
             
             //separate catalog dirs by catalog name
             Dictionary<string, List<DirectoryInfo>> dictCtlgWithItsDirs = new Dictionary<string,List<DirectoryInfo>>();
             foreach (DirectoryInfo ctlgDir in ctlgDirs)
             {
-                //format of catalog backup folder = "catalog" + "P4_" + datetime.log
-                //collect catalog directories and separate it by catalog name...
-                string catalogName = string.Empty;
+                //initiallize list if its first time. 
+                if (!dictCtlgWithItsDirs.ContainsKey(catalogName))
+                    dictCtlgWithItsDirs.Add(catalogName, new List<DirectoryInfo>());
                 
-                if (ctlgDir.Name.Contains("P4_"))
-                    catalogName = ctlgDir.Name.Substring(0, ctlgDir.Name.IndexOf("P4_") + 2);
-                if (ctlgDir.Name.Contains("p4_"))
-                    catalogName = ctlgDir.Name.Substring(0, ctlgDir.Name.IndexOf("p4_") + 2);
-
-                if (!catalogName.Equals(string.Empty))
-                {
-                    if (!dictCtlgWithItsDirs.ContainsKey(catalogName))
-                    {
-                        dictCtlgWithItsDirs.Add(catalogName, new List<DirectoryInfo>());
-                        dictCtlgWithItsDirs[catalogName].Add(ctlgDir);
-                    }
-                    else
-                        dictCtlgWithItsDirs[catalogName].Add(ctlgDir);
-                }
+                dictCtlgWithItsDirs[catalogName].Add(ctlgDir);
             }
             return dictCtlgWithItsDirs;
         }
@@ -262,46 +244,54 @@ namespace BackupUtility
         /// leave last 3 copies of catalog backups
         /// </summary>
         /// <param name="catalogDirs"></param>
-        private static void DeleteExtraCatalogBackups(DirectoryInfo[] catalogDirs, string catalog)
+        private static void DeleteExtraCatalogBackups(Dictionary<string, List<DirectoryInfo>> allCatalogDirs, string catalog)
         {
-            catalogDirs = catalogDirs.OrderBy(p => p.CreationTime).ToArray();
-            string msg = string.Format("\tTotal backup copy '{1}', latest catalog copy date '{2}'.", catalog, catalogDirs.Length, catalogDirs[catalogDirs.Length - 1].CreationTime.ToShortDateString());
-            log.Info("\t" + msg, false); Console.WriteLine("\n" + msg);
-                        
-            if (catalogDirs.Length > 3)
+            //Delete extra backup copy 
+            //Only if catalog has more than one backup copy already exists
+            //Before deleting check number of existing copy of catalog backup. 
+            if (allCatalogDirs.ContainsKey(catalog))
             {
-                string latestCatalogMessage = "\t\tCurrent catalogs have the dates ";
-                int counter = 0; 
-                Console.WriteLine(string.Format("\nCatalog dirs to delete : {0}", catalogDirs.Length - 3));
-                foreach (DirectoryInfo dir in catalogDirs)
+                DirectoryInfo[] catalogDirs = allCatalogDirs[catalog].ToArray();
+                catalogDirs = catalogDirs.OrderBy(p => p.CreationTime).ToArray();
+                string msg = string.Format("Total number of backup copies: {0}.", catalogDirs.Length);
+                log.Info(msg, false); Console.WriteLine("\n" + msg);
+
+                if (catalogDirs.Length > 3)
                 {
-                    try
+                    string latestCatalogMessage = "Current catalogs have the dates";
+                    int counter = 0;
+                    Console.WriteLine(string.Format("\nCatalog dirs to delete : {0}", catalogDirs.Length - 3));
+                    foreach (DirectoryInfo dir in catalogDirs)
                     {
-                        if (counter < catalogDirs.Length - 3)
+                        try
                         {
-                            if (_deleteOldCatalogs)
+                            if (counter < catalogDirs.Length - 3)
                             {
-                                Directory.Delete(dir.FullName, true);
-                                Console.WriteLine("Deleted:" + dir.Name);
-                                log.Info("\t\tDeleted : backup copy : " + dir.Name + " created @ '" + dir.CreationTime + "'", false);
+                                if (_deleteOldCatalogs)
+                                {
+                                    Directory.Delete(dir.FullName, true);
+                                    Console.WriteLine("Deleted:" + dir.Name);
+                                    log.Info("Deleted backup copy " + dir.Name + " created @ " + dir.CreationTime, false);
+                                }
+                                else
+                                {
+                                    log.Info("Catalog dir " + dir.Name + " created @ " + dir.CreationTime + ", To delete.", false);
+                                }
                             }
                             else
-                                log.Info("\t\tCatalog dir " + dir.Name + " created @ " + dir.CreationTime + ", To delete.", false);
+                            {
+                                latestCatalogMessage = string.Format("{0} {1},", latestCatalogMessage, dir.CreationTime);
+                            }
                         }
-                        else
+                        catch (Exception e)
                         {
-                            latestCatalogMessage = latestCatalogMessage + "\"" + dir.CreationTime + "\",";
+                            Console.WriteLine(e.Message);
+                            log.Error(string.Format("Catalog : {0}\nException : {1}\nStacktrace : {2}", catalog, e.Message, e.InnerException) , false);
                         }
+                        counter++;
                     }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine(e.Message);
-                        log.Error("Catalog : {0}\nException : {1}\nStacktrace : {2}", false);
-                    }
-                    counter++;
+                    log.Info(string.Format("{0}.", latestCatalogMessage.Trim().Substring(0, latestCatalogMessage.Length - 1)), false);
                 }
-                latestCatalogMessage = latestCatalogMessage.Substring(0, latestCatalogMessage.Length - 1) + ".";
-                log.Info(latestCatalogMessage, false);
             }
         }
 
