@@ -865,7 +865,7 @@ namespace BackupUtility.Debug
                 string level = null;
                 try
                 {
-                    level = ConfigurationSettings.AppSettings[LEVEL_PARAM];
+                    level = ConfigurationManager.AppSettings[LEVEL_PARAM];
                 }
                 catch (Exception ex)
                 {
