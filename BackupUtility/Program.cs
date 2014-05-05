@@ -16,6 +16,7 @@ namespace BackupUtility
         private static string _backingUpProgressMessage = string.Empty;
         private static bool _deleteOldCatalogs = true;
         private static int _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage = 10;
+        private static int _lowDiskSpaceWarningIfDiskSpaceLessThanThresholdInPercentage = 20;
 
         static void Main(string[] args)
         {
@@ -31,16 +32,25 @@ namespace BackupUtility
                 logFile = GetValueFromConfigOrArgument(args, "backupLogFile") + string.Format("BackupLog_{0}-{1}-{2}-{3}{4}{5}.txt", dtBackupFileDate.Month.ToString("d2"), dtBackupFileDate.Day.ToString("d2"), dtBackupFileDate.Year.ToString("d4"), dtBackupFileDate.Hour.ToString("d2"), dtBackupFileDate.Minute.ToString("d2"), dtBackupFileDate.Second.ToString("d2"));
                 
                 clientName = GetValueFromConfigOrArgument(args, "clientName");
-                _keepLastXCopyOfBackup = Convert.ToInt32(GetValueFromConfigOrArgument(args, "keepLastXCopyOfBackup"));
+                mailSubject = string.Empty;
+                sourceDir = GetValueFromConfigOrArgument(args, "sourceDir");
+                destinationDir = GetValueFromConfigOrArgument(args, "destinationDir");
+
                 _sendEmailPath = GetValueFromConfigOrArgument(args, "sendEmailExePath");
-                mailSubject = "";
                 _mailFrom = GetValueFromConfigOrArgument(args, "mailFrom");
                 _mailTo = GetValueFromConfigOrArgument(args, "mailTo");
                 _mailServer = GetValueFromConfigOrArgument(args, "mailServer");
-                sourceDir = GetValueFromConfigOrArgument(args, "sourceDir");
-                destinationDir = GetValueFromConfigOrArgument(args, "destinationDir");
+                
                 _deleteOldCatalogs = Convert.ToBoolean(GetValueFromConfigOrArgument(args, "deleteOldCatalogs"));
-                _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage = Convert.ToInt32(GetValueFromConfigOrArgument(args, "lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage"));
+                
+                int value = Convert.ToInt32(GetValueFromConfigOrArgument(args, "lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage", "int"));
+                _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage = value.Equals(0) ? _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage : value;
+
+                value = Convert.ToInt32(GetValueFromConfigOrArgument(args, "lowDiskSpaceWarningIfDiskSpaceLessThanThresholdInPercentage", "int"));
+                _lowDiskSpaceWarningIfDiskSpaceLessThanThresholdInPercentage = value.Equals(0) ? _lowDiskSpaceWarningIfDiskSpaceLessThanThresholdInPercentage : value;
+
+                value = Convert.ToInt32(GetValueFromConfigOrArgument(args, "keepLastXCopyOfBackup", "int"));
+                _keepLastXCopyOfBackup = value.Equals(0) ? _keepLastXCopyOfBackup : value;
 
                 Logger.LogToConsole = false;
                 Logger.PrimaryLogFile = logFile;
@@ -84,8 +94,7 @@ namespace BackupUtility
 
                     if (catalogTobackupQueue.Count < 1)
                     {
-                        mailSubject = "Daily catalog backup was Successful";
-                        SendMail(mailSubject, mailBody, logFile);
+                        SendSuccessMail(sourceDir, mailBody, logFile);
                         Environment.Exit(0);
                     }
 
@@ -175,8 +184,7 @@ namespace BackupUtility
             }
             else
             {
-                mailSubject = "Daily catalog backup was Successful";
-                SendMail(mailSubject, mailBody, logFile);
+                SendSuccessMail(sourceDir, mailBody, logFile);
             }
         }
 
@@ -209,16 +217,8 @@ namespace BackupUtility
         private static void DetermineBackupSpaceAvailability(string sourceDir, long diskSpaceReqForCatalog, string catalog)
         {
             //get available disk space
-            string driveName = sourceDir.Substring(0, 1) + ":\\"; long availableDiskSpace = 0; long totalDiskSpace = 0;
-            foreach (DriveInfo drive in DriveInfo.GetDrives())
-            {
-                if (drive.IsReady && drive.Name == driveName)
-                {
-                    availableDiskSpace = drive.TotalFreeSpace;
-                    totalDiskSpace = drive.TotalSize;
-                    break;
-                }
-            }
+            long availableDiskSpace = 0; long totalDiskSpace = 0;
+            GetDiskSpace(sourceDir, ref availableDiskSpace, ref totalDiskSpace);
 
             //available disk space after catalog backup 
             availableDiskSpace = availableDiskSpace - diskSpaceReqForCatalog;
@@ -229,13 +229,33 @@ namespace BackupUtility
             if (afterBackupRemainingDiskSpacePercentage < _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage)
             {
                 log.Error("catalog " + catalog + " backup faild as do not have enough space on drive.");
-                string mailSubject = string.Format("CRITICAL ALERT! Daily Catalog Backup Failed! - Low Disk Space");
-                string mailBody = string.Format("Catalog backup cannot be completed as availeble disk space on drive is less than threshold {0}%\n"
-                        + "Total Disk Space : {1:00.00}, \nDisk Space required for Catalog backup : {2:00.00}\nAvailable diskspace after backup : {3:00.00}({0})",
-                            _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage, ConvertBytesToMegabytes(totalDiskSpace),
-                            ConvertBytesToMegabytes(diskSpaceReqForCatalog), ConvertBytesToMegabytes(availableDiskSpace));
+                string mailSubject = string.Format("CRITICAL ALERT!!! Daily Catalog Backup Failed! - Low Disk Space");
+
+                string mailBody = string.Format(
+                        "The catalog backups cannot be completed. Available free disk space is less than {0}%.\n" +
+                        "Free disk space remaining after backups: {1:00.00}",
+                            _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage, ConvertBytesToGigabytes(availableDiskSpace));
+
                 SendMail(mailSubject, mailBody, "");
                 Environment.Exit(1);
+            }
+        }
+
+        /// <summary> Get disk space  </summary>
+        /// <param name="sourceDir">Source directory</param>
+        /// <param name="availableDiskSpace">Available disk space</param>
+        /// <param name="totalDiskSpace">Total disk space</param>
+        public static void GetDiskSpace(string sourceDir, ref long availableDiskSpace, ref long totalDiskSpace)
+        {
+            string driveName = sourceDir.Substring(0, 1) + ":\\";
+            foreach (DriveInfo drive in DriveInfo.GetDrives())
+            {
+                if (drive.IsReady && drive.Name == driveName)
+                {
+                    availableDiskSpace = drive.TotalFreeSpace;
+                    totalDiskSpace = drive.TotalSize;
+                    break;
+                }
             }
         }
 
@@ -399,7 +419,7 @@ namespace BackupUtility
         /// <param name="args">List of arguments</param>
         /// <param name="ArgumentName">Argument name</param>
         /// <returns></returns>
-        private static String GetValueFromConfigOrArgument(string[] args, String ArgumentName)
+        private static String GetValueFromConfigOrArgument(string[] args, String ArgumentName, string argsType="string")
         {
             String CurrentValue;
             CurrentValue = System.Configuration.ConfigurationManager.AppSettings[ArgumentName];
@@ -431,7 +451,38 @@ namespace BackupUtility
             if (CurrentValue.Contains("\\"))
                 CurrentValue = CurrentValue.Replace("\\", "/");
 
+            if (argsType.Equals("int"))
+            {
+                int number;
+                if (!int.TryParse(CurrentValue, out number))
+                    CurrentValue = "0";
+            }
+
             return CurrentValue;
+        }
+
+        private static void SendSuccessMail(string sourceDir, string body, string logfile)
+        {
+            long totalDiskSpace = 0, availableDiskSpace = 0;
+            GetDiskSpace(sourceDir, ref availableDiskSpace, ref totalDiskSpace);
+
+            double remainingDiskSpacePercentage = (availableDiskSpace * 100) / totalDiskSpace;
+            bool isWarningRequired = remainingDiskSpacePercentage <= _lowDiskSpaceWarningIfDiskSpaceLessThanThresholdInPercentage;
+            
+            if (isWarningRequired)
+            {
+                Logger.Shutdown();
+
+                body = string.Format("Catalog backups are approaching the critical low free disk space threshold. Available free disk space is {0}%.\n" +
+                        "Free disk space remaining: {1:00.00} GB\n" +
+                        "Catalog backups will be suspended when the free disk space falls below {2}%.", remainingDiskSpacePercentage, ConvertBytesToGigabytes(availableDiskSpace),
+                        _lowDiskSpaceAlertIfDiskSpaceLessThanThresholdInPercentage);
+                body = body + "\n\n----------------\n\n" + File.ReadAllText(Logger.PrimaryLogFile);
+                SendMail("CRITICAL ALERT !!! Daily Catalog Backup is Nearing Low Disk Space", body, string.Empty);
+                return;
+            }
+
+            SendMail("Daily catalog backup was Successful", body, logfile);
         }
 
         /// <summary>
@@ -468,6 +519,16 @@ namespace BackupUtility
         static double ConvertBytesToMegabytes(long bytes)
         {
             return (bytes / 1024f) / 1024f;
+        }
+
+        /// <summary>
+        /// Convert bytes to gb
+        /// </summary>
+        /// <param name="bytes"></param>
+        /// <returns></returns>
+        static double ConvertBytesToGigabytes(long bytes)
+        {
+            return ConvertBytesToMegabytes(bytes) / 1024.0;
         }
     }
 }
